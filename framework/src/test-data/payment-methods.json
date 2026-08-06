@@ -1,0 +1,16 @@
+[
+  {
+    "case": "transferencia_bancaria",
+    "method": "bankwire",
+    "displayName": "Pago por transferencia bancaria",
+    "requiresManualConfirmation": true,
+    "expectedInitialOrderState": "Awaiting payment"
+  },
+  {
+    "case": "contra_reembolso",
+    "method": "cod",
+    "displayName": "Contra reembolso",
+    "requiresManualConfirmation": false,
+    "expectedInitialOrderState": "Awaiting payment"
+  }
+]

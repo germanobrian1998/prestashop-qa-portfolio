@@ -1,0 +1,33 @@
+[
+  {
+    "case": "cliente_valido_ar",
+    "firstName": "Brian",
+    "lastName": "Perez",
+    "email": "brian.qa.valido@prestashop-qa.local",
+    "password": "ValidPass2026!"
+  },
+  {
+    "case": "email_ya_registrado",
+    "firstName": "Duplicado",
+    "lastName": "Test",
+    "email": "qa.customer@prestashop-qa.local",
+    "password": "OtraPass2026!",
+    "expectedError": "email ya existe"
+  },
+  {
+    "case": "password_debil",
+    "firstName": "Debil",
+    "lastName": "Password",
+    "email": "debil.qa@prestashop-qa.local",
+    "password": "123",
+    "expectedError": "password no cumple longitud mínima"
+  },
+  {
+    "case": "email_formato_invalido",
+    "firstName": "Malformado",
+    "lastName": "Email",
+    "email": "no-es-un-email",
+    "password": "ValidPass2026!",
+    "expectedError": "formato de email inválido"
+  }
+]

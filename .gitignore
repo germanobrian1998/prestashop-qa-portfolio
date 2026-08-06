@@ -1,0 +1,12 @@
+# Docker
+docker/.env
+
+# Framework (Node / Playwright)
+framework/node_modules/
+framework/dist/
+framework/playwright-report/
+framework/test-results/
+framework/playwright/.auth/*.json
+framework/allure-results/
+framework/allure-report/
+framework/*.log

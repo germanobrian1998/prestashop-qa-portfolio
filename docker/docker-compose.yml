@@ -1,0 +1,55 @@
+# docker-compose.yml
+# A diferencia de un intento anterior con otra plataforma, acá NO hace falta
+# ningún wizard manual ni seed dump: PrestaShop soporta instalación 100%
+# automática vía variables de entorno (PS_INSTALL_AUTO=1).
+# Un solo "docker compose up -d" deja la instancia lista.
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: prestashop_mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWD:-prestashop}
+      MYSQL_DATABASE: ${DB_NAME:-prestashop}
+    ports:
+      - "3306:3306"
+    volumes:
+      - dbdata:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-p${DB_PASSWD:-prestashop}"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+
+  prestashop:
+    image: prestashop/prestashop:${PRESTASHOP_IMAGE_TAG:-8.1-apache}
+    container_name: prestashop_app
+    depends_on:
+      mysql:
+        condition: service_healthy
+    ports:
+      - "80:80"
+    environment:
+      DB_SERVER: mysql
+      DB_NAME: ${DB_NAME:-prestashop}
+      DB_USER: root
+      DB_PASSWD: ${DB_PASSWD:-prestashop}
+      PS_INSTALL_AUTO: 1
+      PS_DEMO_MODE: 0
+      PS_DEV_MODE: 0
+      PS_DOMAIN: localhost
+      PS_LANGUAGE: ${PS_LANGUAGE:-es}
+      PS_COUNTRY: ${PS_COUNTRY:-ar}
+      PS_FOLDER_ADMIN: ${PS_FOLDER_ADMIN:-admin-qa}
+      PS_FOLDER_INSTALL: install-qa
+      ADMIN_MAIL: ${ADMIN_MAIL}
+      ADMIN_PASSWD: ${ADMIN_PASSWD}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 60s
+
+volumes:
+  dbdata:
