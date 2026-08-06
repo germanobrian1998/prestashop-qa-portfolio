@@ -1,0 +1,32 @@
+[
+  {
+    "case": "producto_stock_disponible",
+    "name": "Hummingbird printed t-shirt",
+    "reference": "demo_1",
+    "quantityInStock": 100,
+    "quantityToBuy": 1
+  },
+  {
+    "case": "producto_ultima_unidad",
+    "name": "Hummingbird printed t-shirt",
+    "reference": "demo_1",
+    "quantityInStock": 1,
+    "quantityToBuy": 1
+  },
+  {
+    "case": "producto_sin_stock",
+    "name": "Hummingbird printed t-shirt",
+    "reference": "demo_1",
+    "quantityInStock": 0,
+    "quantityToBuy": 1,
+    "expectedError": "producto sin stock disponible"
+  },
+  {
+    "case": "cantidad_excede_stock",
+    "name": "Hummingbird printed t-shirt",
+    "reference": "demo_1",
+    "quantityInStock": 5,
+    "quantityToBuy": 10,
+    "expectedError": "cantidad solicitada supera el stock"
+  }
+]

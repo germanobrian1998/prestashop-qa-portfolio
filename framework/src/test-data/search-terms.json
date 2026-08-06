@@ -1,0 +1,22 @@
+[
+  {
+    "case": "termino_con_resultados",
+    "term": "shirt",
+    "expectedMinResults": 1
+  },
+  {
+    "case": "termino_sin_resultados",
+    "term": "zzzznoexiste9999",
+    "expectedMinResults": 0
+  },
+  {
+    "case": "termino_vacio",
+    "term": "",
+    "expectedMinResults": 0
+  },
+  {
+    "case": "termino_con_caracteres_especiales",
+    "term": "%27--",
+    "expectedMinResults": 0
+  }
+]

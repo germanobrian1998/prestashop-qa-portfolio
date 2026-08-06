@@ -1,0 +1,32 @@
+{
+  "name": "prestashop-qa-framework",
+  "version": "1.0.0",
+  "description": "Framework de automatización E2E + API para PrestaShop (Playwright + TypeScript)",
+  "private": true,
+  "scripts": {
+    "test": "playwright test",
+    "test:smoke": "playwright test --grep @smoke",
+    "test:regression": "playwright test --grep @regression",
+    "test:frontoffice": "playwright test --project=frontoffice",
+    "test:frontoffice-auth": "playwright test --project=frontoffice-auth",
+    "test:backoffice": "playwright test --project=backoffice",
+    "test:api": "playwright test --project=api",
+    "test:headed": "playwright test --headed",
+    "test:ui": "playwright test --ui",
+    "report": "playwright show-report",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src --ext .ts"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.48.0",
+    "@types/node": "^22.7.0",
+    "@typescript-eslint/eslint-plugin": "^8.8.0",
+    "@typescript-eslint/parser": "^8.8.0",
+    "dotenv": "^16.4.5",
+    "eslint": "^8.57.0",
+    "typescript": "^5.6.2"
+  },
+  "dependencies": {
+    "@faker-js/faker": "^9.0.3"
+  }
+}
