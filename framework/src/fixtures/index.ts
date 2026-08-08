@@ -20,6 +20,7 @@ import { CheckoutFacade } from '../facades/CheckoutFacade';
 import { WebserviceClient } from '../api/WebserviceClient';
 import { ProductsApi } from '../api/ProductsApi';
 import { OrdersApi } from '../api/OrdersApi';
+import { DummyPaymentWebhookClient } from '../api/DummyPaymentWebhookClient';
 
 /**
  * Dependency Inversion: los tests declaran qué Page Objects / facades /
@@ -53,6 +54,7 @@ type Fixtures = {
   webserviceClient: WebserviceClient;
   productsApi: ProductsApi;
   ordersApi: OrdersApi;
+  dummyPaymentWebhookClient: DummyPaymentWebhookClient;
 };
 
 export const test = base.extend<Fixtures>({
@@ -81,6 +83,12 @@ export const test = base.extend<Fixtures>({
   },
   productsApi: async ({ webserviceClient }, use) => use(new ProductsApi(webserviceClient)),
   ordersApi: async ({ webserviceClient }, use) => use(new OrdersApi(webserviceClient)),
+
+  dummyPaymentWebhookClient: async ({}, use) => {
+    const client = await DummyPaymentWebhookClient.create();
+    await use(client);
+    await client.dispose();
+  },
 });
 
 export { expect } from '@playwright/test';

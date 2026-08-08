@@ -57,12 +57,14 @@ src/
 - **Locators**: `getByRole` > `getByTestId` > `getByLabel`/`getByPlaceholder` >
   `getByText`. Nunca XPath ni clases CSS generadas por el theme.
 - **Método de pago de test:** transferencia bancaria / contra reembolso, sin
-  gateway externo (ver `CheckoutPaymentPage.ts`). El módulo de pago dummy para
-  testear estados asíncronos se agrega en la Sección 5.1 (pendiente).
+  gateway externo (ver `CheckoutPaymentPage.ts`). El módulo de pago dummy
+  (Sección 5.1, `selectDummyGateway()`) sí permite testear confirmación
+  asíncrona vía webhook — requiere `WEBSERVICE_WEBHOOK_SECRET` en `.env`,
+  copiado desde Back Office > Módulos > Dummy Payment (QA) > Configurar
+  después de instalar el módulo (ver `dummypayment/README.md`).
 
 ## Pendiente (fuera del alcance de esta entrega)
 
-- Sección 5.1 — módulo de pago dummy (estados pendiente/aprobado/rechazado/timeout)
 - Sección 5.2 — mock de ERP
 - Sección 6 — BDD (Cucumber) + checks OWASP
 - Sección 7 — DB Testing layer contra MySQL

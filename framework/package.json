@@ -11,6 +11,7 @@
     "test:frontoffice-auth": "playwright test --project=frontoffice-auth",
     "test:backoffice": "playwright test --project=backoffice",
     "test:api": "playwright test --project=api",
+    "test:payment": "playwright test --project=frontoffice src/tests/payment",
     "test:headed": "playwright test --headed",
     "test:ui": "playwright test --ui",
     "report": "playwright show-report",
