@@ -3,9 +3,9 @@ import { BasePage } from '../BasePage';
 
 /**
  * Método de pago de test fijado (ver Sección 5, Planificación): transferencia
- * bancaria o contra reembolso — sin gateway externo. Cuando el módulo dummy
- * de la Sección 5.1 esté implementado, este page object se extiende con el
- * método `selectDummyGateway()` correspondiente.
+ * bancaria o contra reembolso — sin gateway externo. La Sección 5.1 agrega
+ * `selectDummyGateway()` para el módulo de pago simulado, que sí permite
+ * testear confirmación asíncrona vía webhook.
  */
 export class CheckoutPaymentPage extends BasePage {
   constructor(page: Page) {
@@ -45,6 +45,17 @@ export class CheckoutPaymentPage extends BasePage {
     // (/Contra reembolso/i) matchea igual por ser parcial, no exige
     // coincidencia completa del nombre accesible.
     await this.paymentOption('Contra reembolso').check();
+  }
+
+  /**
+   * Selecciona el módulo de pago dummy (Sección 5.1). El nombre accesible
+   * del radio sale del `callToActionText` definido en
+   * `DummyPayment::hookPaymentOptions()` — sin confirmar todavía contra
+   * la instancia real, mismo criterio de honestidad que el resto del
+   * scaffold: se corrige con evidencia real cuando se corra por primera vez.
+   */
+  async selectDummyGateway(): Promise<void> {
+    await this.paymentOption('Pago simulado').check();
   }
 
   /** Submit final del checkout — confirma el pedido y espera la navegación resultante. */

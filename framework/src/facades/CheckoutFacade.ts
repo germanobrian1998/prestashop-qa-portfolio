@@ -11,7 +11,7 @@ import { Product } from '../factories/ProductFactory';
 import { Address, AddressFactory } from '../factories/AddressFactory';
 
 export interface PaymentSelection {
-  method: 'bankwire' | 'cod';
+  method: 'bankwire' | 'cod' | 'dummy';
 }
 
 /**
@@ -75,8 +75,10 @@ export class CheckoutFacade {
     await this.paymentPage.acceptTerms();
     if (payment.method === 'bankwire') {
       await this.paymentPage.selectBankWire();
-    } else {
+    } else if (payment.method === 'cod') {
       await this.paymentPage.selectCashOnDelivery();
+    } else {
+      await this.paymentPage.selectDummyGateway();
     }
     await this.paymentPage.placeOrder();
 
