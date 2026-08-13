@@ -10,3 +10,5 @@ framework/playwright/.auth/*.json
 framework/allure-results/
 framework/allure-report/
 framework/*.log
+docker/test-results/
+docker/test-results/
