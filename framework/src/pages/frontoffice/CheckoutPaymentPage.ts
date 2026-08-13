@@ -70,4 +70,20 @@ export class CheckoutPaymentPage extends BasePage {
     await this.placeOrderButton.click();
     await this.page.waitForURL((url) => url.toString() !== previousUrl, { timeout: 15_000 });
   }
+
+  /**
+   * NUEVO (Sección 6, escenario negativo): a diferencia de placeOrder(),
+   * NO asume que va a haber navegación tras el click — el objetivo de este
+   * método es justamente probar qué pasa cuando no hay método de pago
+   * seleccionado, y no sé de antemano si PrestaShop bloquea el submit del
+   * lado del cliente (el click no dispara nada) o si navega y vuelve con
+   * un error server-side. Si el click tira timeout (botón deshabilitado
+   * o similar), se traga el error a propósito — es información válida
+   * para el step que llama a este método, no una falla del método en sí.
+   */
+  async attemptPlaceOrderWithoutSelectingMethod(): Promise<void> {
+    await this.placeOrderButton.click({ timeout: 5_000 }).catch(() => {
+      // Intencional: ver comentario arriba.
+    });
+  }
 }

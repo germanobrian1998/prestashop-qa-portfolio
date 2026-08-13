@@ -1,0 +1,10 @@
+{
+  "_comment": "SKUs arbitrarios usados por erp-sync.spec.ts, deben coincidir con los seed de erp-mock/src/data/store.ts. Alinear con products.json real antes de correr contra la instancia Docker.",
+  "skus": [
+    "DEMO-TSHIRT-001",
+    "DEMO-MUG-002",
+    "DEMO-CAP-003",
+    "DEMO-POSTER-004"
+  ],
+  "primarySku": "DEMO-TSHIRT-001"
+}

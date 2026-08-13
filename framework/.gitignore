@@ -7,3 +7,6 @@ playwright/.auth/*.json
 allure-results/
 allure-report/
 *.log
+.features-gen/
+.features-gen/
+*.bak.*
