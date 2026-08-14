@@ -49,10 +49,12 @@ const ADMIN_AUTH_FILE = path.join(__dirname, 'playwright/.auth/admin.json');
 
 /**
  * Playwright config para PrestaShop QA.
- * 5 proyectos: frontoffice (sesión cliente), frontoffice-auth (sin sesión,
+ * 6 proyectos: frontoffice (sesión cliente), frontoffice-auth (sin sesión,
  * para los tests de login/registro que necesitan arrancar deslogueados),
  * backoffice (sesión admin), api (sin storageState, usa WebserviceClient
- * con Basic Auth), mobile (viewport emulado, con sesión cliente).
+ * con Basic Auth), erp (habla HTTP directo con el mock, sin browser),
+ * db (Sección 7 — habla directo con MySQL vía DbClient, sin browser),
+ * mobile (viewport emulado, con sesión cliente).
  *
  * globalSetup hace login por UI una única vez en cada superficie y persiste
  * el storageState — evita repetir el login en cada test. Los tests de
@@ -89,7 +91,7 @@ export default defineConfig({
     {
       name: 'frontoffice',
       testDir: './src/tests',
-      testIgnore: ['**/admin/**', '**/api/**', '**/auth/**', '**/erp/**'],
+      testIgnore: ['**/admin/**', '**/api/**', '**/auth/**', '**/erp/**', '**/db/**'],
       use: {
         ...devices['Desktop Chrome'],
         storageState: CUSTOMER_AUTH_FILE,
@@ -156,10 +158,18 @@ export default defineConfig({
       use: {},
     },
     {
+      name: 'db',
+      testDir: './src/tests/db',
+      // Sección 7 — Sin storageState ni baseURL de navegador: los specs
+      // de esta sección hablan directo con MySQL vía DbClient (fixture
+      // `dbClient`), no usan `page` ni `request` del navegador.
+      use: {},
+    },
+    {
       name: 'mobile',
       testDir: './src/tests',
       // Mismo motivo que en 'frontoffice': auth/ no puede heredar sesión.
-      testIgnore: ['**/admin/**', '**/api/**', '**/auth/**', '**/erp/**'],
+      testIgnore: ['**/admin/**', '**/api/**', '**/auth/**', '**/erp/**', '**/db/**'],
       use: {
         ...devices['Pixel 7'],
         storageState: CUSTOMER_AUTH_FILE,

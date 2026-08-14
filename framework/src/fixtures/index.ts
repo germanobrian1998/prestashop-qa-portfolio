@@ -21,6 +21,7 @@ import { WebserviceClient } from '../api/WebserviceClient';
 import { ProductsApi } from '../api/ProductsApi';
 import { OrdersApi } from '../api/OrdersApi';
 import { DummyPaymentWebhookClient } from '../api/DummyPaymentWebhookClient';
+import { DbClient } from '../db/DbClient';
 
 /**
  * Dependency Inversion: los tests declaran qué Page Objects / facades /
@@ -55,6 +56,9 @@ type Fixtures = {
   productsApi: ProductsApi;
   ordersApi: OrdersApi;
   dummyPaymentWebhookClient: DummyPaymentWebhookClient;
+
+  // DB (Sección 7)
+  dbClient: DbClient;
 };
 
 export const test = base.extend<Fixtures>({
@@ -86,6 +90,14 @@ export const test = base.extend<Fixtures>({
 
   dummyPaymentWebhookClient: async ({}, use) => {
     const client = await DummyPaymentWebhookClient.create();
+    await use(client);
+    await client.dispose();
+  },
+
+  // Sección 7 — DB Testing. Mismo patrón que webserviceClient/dummyPaymentWebhookClient:
+  // conecta al construirse (vía DATABASE_URL), cierra la conexión al terminar el test.
+  dbClient: async ({}, use) => {
+    const client = await DbClient.create();
     await use(client);
     await client.dispose();
   },

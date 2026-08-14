@@ -12,3 +12,4 @@ framework/allure-report/
 framework/*.log
 docker/test-results/
 docker/test-results/
+test-results/

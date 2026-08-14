@@ -16,7 +16,16 @@ services:
     volumes:
       - dbdata:/var/lib/mysql
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-p${DB_PASSWD:-prestashop}"]
+      test:
+        [
+          "CMD",
+          "mysqladmin",
+          "ping",
+          "-h",
+          "localhost",
+          "-uroot",
+          "-p${DB_PASSWD:-prestashop}",
+        ]
       interval: 5s
       timeout: 5s
       retries: 15
@@ -29,6 +38,8 @@ services:
         condition: service_healthy
     ports:
       - "80:80"
+    volumes:
+      - ../module/dummypayment:/var/www/html/modules/dummypayment
     environment:
       DB_SERVER: mysql
       DB_NAME: ${DB_NAME:-prestashop}
