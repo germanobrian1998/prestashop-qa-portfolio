@@ -10,3 +10,4 @@ allure-report/
 .features-gen/
 .features-gen/
 *.bak.*
+.backup-*/
