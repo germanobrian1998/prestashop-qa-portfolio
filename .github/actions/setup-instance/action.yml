@@ -1,0 +1,79 @@
+name: 'Setup PrestaShop instance'
+description: >
+  Levanta Docker Compose con instalación 100% automática, espera el
+  healthcheck real del Front Office (siguiendo redirects), activa el
+  módulo dummy payment, instala dependencias del framework y corre
+  ci-seed.ts. Reusado por todos los jobs que necesitan una instancia
+  PrestaShop viva — cada job de GitHub Actions corre en su propia VM
+  aislada, así que `needs:` solo ordena ejecución, no comparte
+  containers entre jobs. Cada job que use este action obtiene SU PROPIA
+  instancia nueva; no reusar outputs de otro job para estos valores.
+outputs:
+  test_customer_id:
+    description: 'ID del cliente de test (ver ci-seed.ts)'
+    value: ${{ steps.seed.outputs.TEST_CUSTOMER_ID }}
+  carrier_south_america_id:
+    description: 'id_carrier resuelto por id_reference en esta corrida'
+    value: ${{ steps.seed.outputs.CARRIER_SOUTH_AMERICA_ID }}
+  webservice_webhook_secret:
+    description: 'Webhook secret leído por ci-seed.ts'
+    value: ${{ steps.seed.outputs.WEBSERVICE_WEBHOOK_SECRET }}
+runs:
+  using: composite
+  steps:
+    - name: Levantar Docker Compose (instalación 100% automática)
+      working-directory: docker
+      shell: bash
+      env:
+        PS_INSTALL_AUTO: 1
+        PS_DEMO_MODE: 1
+      run: docker compose up -d
+
+    # No confiar solo en el healthcheck del container (puede tardar más
+    # que start_period/retries si la instancia está reinstalando) —
+    # pollear el Front Office directamente hasta obtener 200. Usa -L
+    # porque PrestaShop devuelve 302 desde "/" hacia la home real como
+    # parte de su comportamiento normal (confirmado 2026-08-18) — exigir
+    # 200 literal en el primer hop rechaza una instancia sana.
+    - name: Esperar healthcheck real (Front Office responde 200)
+      shell: bash
+      run: |
+        for i in $(seq 1 60); do
+          code=$(curl -s -o /dev/null -w '%{http_code}' -L "$BASE_URL" || true)
+          if [ "$code" = "200" ]; then
+            echo "Front Office OK (intento $i)"
+            exit 0
+          fi
+          echo "Front Office aún no responde (intento $i, code=$code)"
+          sleep 5
+        done
+        echo "Front Office no respondió 200 tras 5 minutos"
+        exit 1
+
+    - name: Activar módulo dummy payment
+      working-directory: docker
+      shell: bash
+      run: docker compose exec -T prestashop php bin/console prestashop:module install dummypayment
+
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 20
+        cache: npm
+        cache-dependency-path: framework/package-lock.json
+
+    - name: Instalar dependencias del framework
+      working-directory: framework
+      shell: bash
+      run: npm ci
+
+    - name: Seed post-reinstall (cuentas Webservice, cliente, carrier, webhook secret)
+      id: seed
+      working-directory: framework
+      shell: bash
+      run: npx ts-node scripts/ci-seed.ts
+
+    - name: Subir docker-compose logs (debug si falla)
+      if: failure()
+      working-directory: docker
+      shell: bash
+      run: docker compose logs
