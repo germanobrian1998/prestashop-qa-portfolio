@@ -107,7 +107,7 @@ jobs:
       - name: Esperar healthcheck real (Front Office responde 200)
         run: |
           for i in $(seq 1 60); do
-            code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL" || true)
+            code=$(curl -s -o /dev/null -w '%{http_code}' -L "$BASE_URL" || true)
             if [ "$code" = "200" ]; then
               echo "Front Office OK (intento $i)"
               exit 0
