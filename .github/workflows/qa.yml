@@ -21,19 +21,35 @@
 #     prestashop:module install dummypayment` (confirmado idempotente,
 #     corre sin error incluso si ya estaba instalado y activo).
 #
+# SUPUESTOS RESUELTOS ESTA SESIÓN (2026-08-18, primera corrida real
+# contra GitHub Actions):
+#   - [D] TARGET_CARRIER_ID_REFERENCE=2 CONFIRMADO contra instalación
+#     100% limpia vía PS_INSTALL_AUTO=1 en el runner de GitHub Actions
+#     (antes solo se había confirmado contra containers preexistentes).
+#     ci-seed.ts corrió sin fallar el chequeo explícito de este supuesto.
+#   - Healthcheck real: PrestaShop devuelve 302 (no 200) desde "/" como
+#     comportamiento NORMAL post-instalación exitosa (confirmado con
+#     `docker compose logs`: "-- Installation successful! --" seguido de
+#     302 consistente, no transitorio). Fix: curl -L para seguir el
+#     redirect y evaluar el código final.
+#   - GAP DE ARQUITECTURA encontrado y resuelto: cada job de GitHub
+#     Actions corre en su propia VM aislada. `needs: setup` solo
+#     garantiza orden de ejecución, NO comparte los containers Docker
+#     levantados en el job `setup` con jobs downstream (smoke,
+#     regression, db-testing, performance) — cada uno necesita su
+#     PROPIA instancia. Resuelto extrayendo la lógica de instalación a
+#     `.github/actions/setup-instance` (composite action), invocado por
+#     cada job que necesita una instancia viva. El job `setup` en sí se
+#     mantiene como gate fail-fast: si la instalación no es viable,
+#     falla una sola vez ahí en vez de fallar en paralelo en 6+ jobs
+#     downstream (smoke + 4 shards de regression + db-testing),
+#     desperdiciando minutos de CI.
+#
 # SUPUESTOS SIN CONFIRMAR RESTANTES:
-#   - [D] en ci-seed.ts: TARGET_CARRIER_ID_REFERENCE=2 confirmado hoy,
-#     no probado contra una reinstalación 100% limpia desde cero.
-#   - El healthcheck de `docker compose ps` puede tardar más que el
-#     start_period/retries configurado (ver nota en 00-estado-proyecto-v4.md).
-#     El step "Esperar healthcheck real" de abajo hace polling propio con
-#     curl contra el Front Office en vez de confiar solo en el healthcheck
-#     del container, para evitar falsos negativos por timing.
 #   - JOB "api" (Postman/Newman): no hay colección de Postman en el repo
-#     todavía (no se menciona en ningún archivo de estado). Este job
-#     queda como placeholder comentado — no activar hasta que exista la
-#     colección, para no romper el pipeline con un paso que no tiene qué
-#     ejecutar.
+#     todavía. Este job queda como placeholder comentado — no activar
+#     hasta que exista la colección, para no romper el pipeline con un
+#     paso que no tiene qué ejecutar.
 # -----------------------------------------------------------------------
 
 name: QA Pipeline
@@ -54,8 +70,9 @@ env:
   DATABASE_URL: mysql://root:${{ secrets.DB_PASSWD }}@localhost:3306/prestashop
   # Confirmado 2026-08-15: son valores FIJOS, no algo que se "genera" en
   # runtime — el string de la key es a la vez el valor de Basic Auth y
-  # lo que se inserta como ps_webservice_account.key. ci-seed.ts es quien
-  # crea la cuenta/permiso/asociación a shop para que la key funcione.
+  # lo que se inserta como ps_webservice_account.key. ci-seed.ts (vía el
+  # composite action ./.github/actions/setup-instance) es quien crea la
+  # cuenta/permiso/asociación a shop para que la key funcione.
   WEBSERVICE_API_KEY: ${{ secrets.WEBSERVICE_API_KEY }}
   WEBSERVICE_API_KEY_ORDERS_READONLY: ${{ secrets.WEBSERVICE_API_KEY_ORDERS_READONLY }}
   # Cuenta dedicada solo a seeding (customers:POST/GET) — NUNCA referenciada
@@ -82,77 +99,18 @@ jobs:
       - run: npx tsc --noEmit
       - run: npx eslint src/
 
-  # ── Gate 2: levantar instancia + seed ───────────────────────────────
+  # ── Gate 2: validar que la instalación 100% automática + seed son
+  #    viables. Gate fail-fast: si esto falla, evita gastar minutos de CI
+  #    en 6+ jobs downstream que fallarían igual por la misma causa. Los
+  #    outputs de ESTA corrida se descartan a propósito — cada job
+  #    downstream levanta su PROPIA instancia (ver nota de arquitectura
+  #    arriba), no puede reusar containers de este job.
   setup:
     needs: lint
     runs-on: ubuntu-latest
-    outputs:
-      test_customer_id: ${{ steps.seed.outputs.TEST_CUSTOMER_ID }}
-      carrier_south_america_id: ${{ steps.seed.outputs.CARRIER_SOUTH_AMERICA_ID }}
-      webservice_webhook_secret: ${{ steps.seed.outputs.WEBSERVICE_WEBHOOK_SECRET }}
     steps:
       - uses: actions/checkout@v4
-
-      - name: Levantar Docker Compose (instalación 100% automática)
-        working-directory: docker
-        env:
-          PS_INSTALL_AUTO: 1
-          PS_DEMO_MODE: 1
-        run: docker compose up -d
-
-      # No confiar solo en el healthcheck del container (puede tardar
-      # más que start_period/retries si la instancia está reinstalando,
-      # ver nota en 00-estado-proyecto-v4.md) — pollear el Front Office
-      # directamente hasta obtener 200.
-      - name: Esperar healthcheck real (Front Office responde 200)
-        run: |
-          for i in $(seq 1 60); do
-            code=$(curl -s -o /dev/null -w '%{http_code}' -L "$BASE_URL" || true)
-            if [ "$code" = "200" ]; then
-              echo "Front Office OK (intento $i)"
-              exit 0
-            fi
-            echo "Front Office aún no responde (intento $i, code=$code)"
-            sleep 5
-          done
-          echo "Front Office no respondió 200 tras 5 minutos"
-          exit 1
-
-      # Generación de la Webservice API key: PrestaShop no expone un
-      # comando CLI nativo para esto (a diferencia de módulos, ver step
-      # siguiente). Confirmado contra la instancia real (2026-08-15) que
-      # las tablas ps_webservice_account / ps_webservice_account_shop /
-      # ps_webservice_permission empiezan vacías incluso con el volumen
-      # de MySQL persistente — no es exclusivo de una reinstalación
-      # completa. WEBSERVICE_API_KEY / WEBSERVICE_API_KEY_ORDERS_READONLY
-      # son valores fijos (secrets), y ci-seed.ts (función
-      # ensureWebserviceAccounts) crea la cuenta + permiso + asociación a
-      # shop para cada una. Nada que hacer en este step.
-
-      - name: Activar módulo dummy payment
-        working-directory: docker
-        run: |
-          docker compose exec -T prestashop php bin/console prestashop:module install dummypayment
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: framework/package-lock.json
-
-      - name: Instalar dependencias del framework
-        working-directory: framework
-        run: npm ci
-
-      - name: Seed post-reinstall (cuentas Webservice, cliente, carrier, webhook secret)
-        id: seed
-        working-directory: framework
-        run: npx ts-node scripts/ci-seed.ts
-
-      - name: Subir docker-compose logs (debug si falla)
-        if: failure()
-        working-directory: docker
-        run: docker compose logs
+      - uses: ./.github/actions/setup-instance
 
   # ── Smoke ────────────────────────────────────────────────────────────
   smoke:
@@ -161,19 +119,15 @@ jobs:
     defaults:
       run:
         working-directory: framework
-    env:
-      WEBSERVICE_WEBHOOK_SECRET: ${{ needs.setup.outputs.webservice_webhook_secret }}
-      CARRIER_SOUTH_AMERICA_ID: ${{ needs.setup.outputs.carrier_south_america_id }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: framework/package-lock.json
-      - run: npm ci
+      - uses: ./.github/actions/setup-instance
+        id: instance
       - run: npx playwright install --with-deps
       - run: npx playwright test --grep @smoke
+        env:
+          WEBSERVICE_WEBHOOK_SECRET: ${{ steps.instance.outputs.webservice_webhook_secret }}
+          CARRIER_SOUTH_AMERICA_ID: ${{ steps.instance.outputs.carrier_south_america_id }}
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -191,19 +145,15 @@ jobs:
     defaults:
       run:
         working-directory: framework
-    env:
-      WEBSERVICE_WEBHOOK_SECRET: ${{ needs.setup.outputs.webservice_webhook_secret }}
-      CARRIER_SOUTH_AMERICA_ID: ${{ needs.setup.outputs.carrier_south_america_id }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: framework/package-lock.json
-      - run: npm ci
+      - uses: ./.github/actions/setup-instance
+        id: instance
       - run: npx playwright install --with-deps
       - run: npx playwright test --shard=${{ matrix.shard }}/4
+        env:
+          WEBSERVICE_WEBHOOK_SECRET: ${{ steps.instance.outputs.webservice_webhook_secret }}
+          CARRIER_SOUTH_AMERICA_ID: ${{ steps.instance.outputs.carrier_south_america_id }}
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -221,6 +171,7 @@ jobs:
   #   runs-on: ubuntu-latest
   #   steps:
   #     - uses: actions/checkout@v4
+  #     - uses: ./.github/actions/setup-instance
   #     - run: npx newman run postman/collection.json --env-var baseUrl=$BASE_URL
 
   # ── DB testing ───────────────────────────────────────────────────────
@@ -232,13 +183,12 @@ jobs:
         working-directory: framework
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: framework/package-lock.json
-      - run: npm ci
+      - uses: ./.github/actions/setup-instance
+        id: instance
       - run: npx playwright test --project=db
+        env:
+          WEBSERVICE_WEBHOOK_SECRET: ${{ steps.instance.outputs.webservice_webhook_secret }}
+          CARRIER_SOUTH_AMERICA_ID: ${{ steps.instance.outputs.carrier_south_america_id }}
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -252,6 +202,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-instance
       - name: Instalar k6
         run: |
           curl -s https://github.com/grafana/k6/releases/latest/download/k6-linux-amd64.tar.gz -L | tar xz --strip-components 1
