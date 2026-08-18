@@ -46,7 +46,7 @@ on:
 
 env:
   PRESTASHOP_IMAGE_TAG: ${{ vars.PRESTASHOP_IMAGE_TAG }} # pinneado, nunca 'latest'
-  BASE_URL: http://localhost:8080
+  BASE_URL: http://localhost
   ADMIN_MAIL: ${{ secrets.ADMIN_MAIL }}
   ADMIN_PASSWD: ${{ secrets.ADMIN_PASSWD }}
   TEST_CUSTOMER_EMAIL: ${{ secrets.TEST_CUSTOMER_EMAIL }}
