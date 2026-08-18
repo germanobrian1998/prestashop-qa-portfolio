@@ -185,6 +185,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-instance
         id: instance
+      - run: npx playwright install --with-deps
       - run: npx playwright test --project=db
         env:
           WEBSERVICE_WEBHOOK_SECRET: ${{ steps.instance.outputs.webservice_webhook_secret }}
