@@ -1,0 +1,282 @@
+# .github/workflows/qa.yml
+# -----------------------------------------------------------------------
+# Sección 8 — CI/CD con GitHub Actions.
+#
+# Depende de que scripts/ci-seed.ts (Sección 8) resuelva el GAP CRÍTICO
+# documentado en 00-estado-proyecto-v4.md — y AMPLIADO tras verificación
+# en vivo el 2026-08-15: no solo se pierden cliente de test / carrier /
+# webhook secret, sino que el Webservice completo (feature PS_WEBSERVICE
+# + ps_webservice_account + ps_webservice_account_shop +
+# ps_webservice_permission) puede quedar vacío incluso SIN una
+# reinstalación completa — se confirmó vacío contra una instancia con
+# containers de varios días de antigüedad, solo reiniciados. En un
+# pipeline que reinstala desde cero en cada corrida (PS_INSTALL_AUTO=1)
+# esto es el estado inicial esperado siempre, no una excepción.
+#
+# SUPUESTOS RESUELTOS (confirmados contra la instancia real, 2026-08-15):
+#   - [C] key del webhook secret, [A]/[B] zona South America en carrier
+#     existente (no carrier nuevo), y ambas cuentas del Webservice con
+#     sus permisos exactos — ver cabecera de scripts/ci-seed.ts.
+#   - Activación del módulo dummy payment: `php bin/console
+#     prestashop:module install dummypayment` (confirmado idempotente,
+#     corre sin error incluso si ya estaba instalado y activo).
+#
+# SUPUESTOS SIN CONFIRMAR RESTANTES:
+#   - [D] en ci-seed.ts: TARGET_CARRIER_ID_REFERENCE=2 confirmado hoy,
+#     no probado contra una reinstalación 100% limpia desde cero.
+#   - El healthcheck de `docker compose ps` puede tardar más que el
+#     start_period/retries configurado (ver nota en 00-estado-proyecto-v4.md).
+#     El step "Esperar healthcheck real" de abajo hace polling propio con
+#     curl contra el Front Office en vez de confiar solo en el healthcheck
+#     del container, para evitar falsos negativos por timing.
+#   - JOB "api" (Postman/Newman): no hay colección de Postman en el repo
+#     todavía (no se menciona en ningún archivo de estado). Este job
+#     queda como placeholder comentado — no activar hasta que exista la
+#     colección, para no romper el pipeline con un paso que no tiene qué
+#     ejecutar.
+# -----------------------------------------------------------------------
+
+name: QA Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+env:
+  PRESTASHOP_IMAGE_TAG: ${{ vars.PRESTASHOP_IMAGE_TAG }} # pinneado, nunca 'latest'
+  BASE_URL: http://localhost:8080
+  ADMIN_MAIL: ${{ secrets.ADMIN_MAIL }}
+  ADMIN_PASSWD: ${{ secrets.ADMIN_PASSWD }}
+  TEST_CUSTOMER_EMAIL: ${{ secrets.TEST_CUSTOMER_EMAIL }}
+  TEST_CUSTOMER_PASSWORD: ${{ secrets.TEST_CUSTOMER_PASSWORD }}
+  DATABASE_URL: mysql://root:${{ secrets.DB_PASSWD }}@localhost:3306/prestashop
+  # Confirmado 2026-08-15: son valores FIJOS, no algo que se "genera" en
+  # runtime — el string de la key es a la vez el valor de Basic Auth y
+  # lo que se inserta como ps_webservice_account.key. ci-seed.ts es quien
+  # crea la cuenta/permiso/asociación a shop para que la key funcione.
+  WEBSERVICE_API_KEY: ${{ secrets.WEBSERVICE_API_KEY }}
+  WEBSERVICE_API_KEY_ORDERS_READONLY: ${{ secrets.WEBSERVICE_API_KEY_ORDERS_READONLY }}
+  # Cuenta dedicada solo a seeding (customers:POST/GET) — NUNCA referenciada
+  # por permisos.feature ni ningún test de seguridad. Separada a propósito
+  # de las 2 keys de arriba para no ampliar su scope. Ver ci-seed.ts.
+  WEBSERVICE_SEED_API_KEY: ${{ secrets.WEBSERVICE_SEED_API_KEY }}
+
+jobs:
+
+  # ── Gate 1: lint + typecheck ────────────────────────────────────────
+  lint:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: framework
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: framework/package-lock.json
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npx eslint src/
+
+  # ── Gate 2: levantar instancia + seed ───────────────────────────────
+  setup:
+    needs: lint
+    runs-on: ubuntu-latest
+    outputs:
+      test_customer_id: ${{ steps.seed.outputs.TEST_CUSTOMER_ID }}
+      carrier_south_america_id: ${{ steps.seed.outputs.CARRIER_SOUTH_AMERICA_ID }}
+      webservice_webhook_secret: ${{ steps.seed.outputs.WEBSERVICE_WEBHOOK_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Levantar Docker Compose (instalación 100% automática)
+        working-directory: docker
+        env:
+          PS_INSTALL_AUTO: 1
+          PS_DEMO_MODE: 1
+        run: docker compose up -d
+
+      # No confiar solo en el healthcheck del container (puede tardar
+      # más que start_period/retries si la instancia está reinstalando,
+      # ver nota en 00-estado-proyecto-v4.md) — pollear el Front Office
+      # directamente hasta obtener 200.
+      - name: Esperar healthcheck real (Front Office responde 200)
+        run: |
+          for i in $(seq 1 60); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL" || true)
+            if [ "$code" = "200" ]; then
+              echo "Front Office OK (intento $i)"
+              exit 0
+            fi
+            echo "Front Office aún no responde (intento $i, code=$code)"
+            sleep 5
+          done
+          echo "Front Office no respondió 200 tras 5 minutos"
+          exit 1
+
+      # Generación de la Webservice API key: PrestaShop no expone un
+      # comando CLI nativo para esto (a diferencia de módulos, ver step
+      # siguiente). Confirmado contra la instancia real (2026-08-15) que
+      # las tablas ps_webservice_account / ps_webservice_account_shop /
+      # ps_webservice_permission empiezan vacías incluso con el volumen
+      # de MySQL persistente — no es exclusivo de una reinstalación
+      # completa. WEBSERVICE_API_KEY / WEBSERVICE_API_KEY_ORDERS_READONLY
+      # son valores fijos (secrets), y ci-seed.ts (función
+      # ensureWebserviceAccounts) crea la cuenta + permiso + asociación a
+      # shop para cada una. Nada que hacer en este step.
+
+      - name: Activar módulo dummy payment
+        working-directory: docker
+        run: |
+          docker compose exec -T prestashop php bin/console prestashop:module install dummypayment
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: framework/package-lock.json
+
+      - name: Instalar dependencias del framework
+        working-directory: framework
+        run: npm ci
+
+      - name: Seed post-reinstall (cuentas Webservice, cliente, carrier, webhook secret)
+        id: seed
+        working-directory: framework
+        run: npx ts-node scripts/ci-seed.ts
+
+      - name: Subir docker-compose logs (debug si falla)
+        if: failure()
+        working-directory: docker
+        run: docker compose logs
+
+  # ── Smoke ────────────────────────────────────────────────────────────
+  smoke:
+    needs: setup
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: framework
+    env:
+      WEBSERVICE_WEBHOOK_SECRET: ${{ needs.setup.outputs.webservice_webhook_secret }}
+      CARRIER_SOUTH_AMERICA_ID: ${{ needs.setup.outputs.carrier_south_america_id }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: framework/package-lock.json
+      - run: npm ci
+      - run: npx playwright install --with-deps
+      - run: npx playwright test --grep @smoke
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: smoke-report
+          path: framework/playwright-report/
+
+  # ── Regression (paralelo, sharded) ──────────────────────────────────
+  regression:
+    needs: smoke
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    defaults:
+      run:
+        working-directory: framework
+    env:
+      WEBSERVICE_WEBHOOK_SECRET: ${{ needs.setup.outputs.webservice_webhook_secret }}
+      CARRIER_SOUTH_AMERICA_ID: ${{ needs.setup.outputs.carrier_south_america_id }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: framework/package-lock.json
+      - run: npm ci
+      - run: npx playwright install --with-deps
+      - run: npx playwright test --shard=${{ matrix.shard }}/4
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: regression-report-shard-${{ matrix.shard }}
+          path: framework/playwright-report/
+
+  # ── API (Postman/Newman) ────────────────────────────────────────────
+  # PLACEHOLDER: no hay colección de Postman en el repo todavía (no
+  # documentada en ningún archivo de estado). Job comentado hasta que
+  # exista `postman/collection.json`. La cobertura de API vía Playwright
+  # (proyecto `api`, Sección 5) ya corre dentro de smoke/regression.
+  #
+  # api:
+  #   needs: setup
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - run: npx newman run postman/collection.json --env-var baseUrl=$BASE_URL
+
+  # ── DB testing ───────────────────────────────────────────────────────
+  db-testing:
+    needs: setup
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: framework
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: framework/package-lock.json
+      - run: npm ci
+      - run: npx playwright test --project=db
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: db-testing-report
+          path: framework/playwright-report/
+
+  # ── Performance (solo en merge a main) ──────────────────────────────
+  performance:
+    needs: [regression, db-testing]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Instalar k6
+        run: |
+          curl -s https://github.com/grafana/k6/releases/latest/download/k6-linux-amd64.tar.gz -L | tar xz --strip-components 1
+      - run: ./k6 run framework/k6/load-test.js --out json=k6-results.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: k6-results
+          path: k6-results.json
+
+  # ── Reporte de fallo en PR ──────────────────────────────────────────
+  notify:
+    needs: [smoke, regression, db-testing]
+    if: always() && github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Comentar resultado en el PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const jobs = ['smoke', 'regression', 'db-testing'];
+            const results = ${{ toJSON(needs) }};
+            const lines = jobs.map(j => `- ${j}: ${results[j]?.result ?? 'unknown'}`);
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `**Resultado QA Pipeline**\n${lines.join('\n')}`,
+            });
