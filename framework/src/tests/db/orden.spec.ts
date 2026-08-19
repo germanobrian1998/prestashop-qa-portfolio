@@ -2,63 +2,47 @@ import { test, expect } from '../../fixtures';
 import { CustomerFactory } from '../../factories/CustomerFactory';
 
 /**
- * Sección 7 — Flujo de orden (UI → BD). Los tres escenarios pedidos por
- * el Archivo 2: total_paid vs. suma de líneas + envío, decremento de
- * stock, y current_state inicial tras checkout con transferencia
- * bancaria. Severidad P0 si alguno falla (afecta valores monetarios o
- * stock — criterio ya establecido en el proyecto).
+ * Sección 7 — Flujo de orden (UI → BD).
+ *
+ * FIX 2026-08-18: los 3 tests decrementan stock del mismo id_product=1
+ * — bajo ejecución paralela colisionaban entre sí (confirmado en CI:
+ * "Stock esperado: 2399, real: 2397"). Fix combinado: (a) cliente
+ * aislado por test vía CustomerFactory + RegisterPage, igual que
+ * carrito.spec.ts — no evita la colisión de stock por sí solo, pero
+ * elimina cualquier colisión de sesión/carrito entre los 3 tests; (b)
+ * describe.configure({ mode: 'serial' }) para que los 3 tests de este
+ * archivo nunca corran al mismo tiempo, eliminando la carrera sobre
+ * ps_stock_available. Válido porque el job db-testing corre
+ * --project=db en aislamiento (ver qa.yml) — ningún otro proyecto
+ * compite por id_product=1 en simultáneo dentro de esa corrida.
  *
  * ⚠️ SUPUESTOS SIN CONFIRMAR (marcar y revisar):
- * 1. TEST_CUSTOMER_EMAIL / TEST_CUSTOMER_PASSWORD existen en .env
- *    (documentados en Sección 5 del Archivo 2), pero no confirmado con
- *    un grep real en esta sesión. Si el login falla acá, es lo primero
- *    a chequear.
- * 2. Producto demo id_product=1 sin combinaciones (id_product_attribute
- *    = 0) — mismo supuesto que ya usa helpers.ts de Sección 5.1.
- * 3. total_paid / total_paid_tax_incl almacenan el mismo valor (tax
- *    incl) en esta instancia — comportamiento típico de PrestaShop con
- *    configuración default de PS_TAX_ADDRESS_TYPE, no confirmado contra
- *    esta instancia puntual. Si el assert de total_paid (no
- *    total_paid_tax_incl) falla pero el otro pasa, es señal de que la
- *    instancia calcula impuestos distinto y hay que separar los dos
- *    casos.
- * 4. CheckoutFacade.completePurchase() asume storageState de cliente ya
- *    logueado (ver su propio docstring) — el proyecto 'db' NO tiene
- *    storageState (a propósito, lo necesita registro.spec.ts para
- *    arrancar deslogueado). Por eso acá se loguea explícito con
- *    LoginPage antes de cada compra, mismo patrón que checkout-bdd.
- *
- * NOTA DE CONCURRENCIA: el test de stock lee/escribe sobre el mismo
- * producto (id_product=1) que probablemente usan otros specs de checkout
- * (purchase.spec.ts, dummy-payment-states.spec.ts). Si se corre este
- * archivo en paralelo con esos, el decremento esperado podría no
- * coincidir por movimientos de stock concurrentes ajenos a este test.
- * Corrida aislada (--project=db, sin correr junto a frontoffice/mobile)
- * es la forma confiable de validarlo.
+ * 1. RegisterPage.register() deja al cliente logueado inmediatamente
+ *    tras el submit.
+ * 2. Producto demo id_product=1 sin combinaciones obligatorias.
+ * 3. total_paid / total_paid_tax_incl almacenan el mismo valor.
+ * 4. Si en algún momento se agregan MÁS specs al proyecto `db` que
+ *    también toquen id_product=1 (o si db-testing deja de correr
+ *    aislado de otros proyectos), este describe.serial deja de ser
+ *    suficiente — revisar esta nota si vuelve a aparecer el mismo tipo
+ *    de fallo.
  */
 
 const PRODUCT_ID = 1;
-const BANKWIRE_AWAITING_STATE_ID = 10; // "En espera de pago por transferencia bancaria" — confirmado en ps_order_state_lang
-
-async function loginTestCustomer(loginPage: import('../../pages/frontoffice/LoginPage').LoginPage) {
-  const email = process.env.TEST_CUSTOMER_EMAIL ?? '';
-  const password = process.env.TEST_CUSTOMER_PASSWORD ?? '';
-  if (!email || !password) {
-    throw new Error('TEST_CUSTOMER_EMAIL / TEST_CUSTOMER_PASSWORD no están definidas en .env');
-  }
-  await loginPage.goto();
-  await loginPage.login(email, password);
-}
+const BANKWIRE_AWAITING_STATE_ID = 10; // "En espera de pago por transferencia bancaria"
 
 test.describe('DB — Flujo de orden @db @regression', () => {
+  test.describe.configure({ mode: 'serial' });
+
   test('total_paid coincide con la suma de líneas (unit_price × quantity) más envío', async ({
-    loginPage,
+    registerPage,
     checkoutFacade,
     dbClient,
   }) => {
-    await loginTestCustomer(loginPage);
+    const customer = CustomerFactory.create();
+    await registerPage.goto();
+    await registerPage.register(customer);
 
-    const customer = CustomerFactory.create({ email: process.env.TEST_CUSTOMER_EMAIL });
     const quantity = 2;
     const { confirmed, orderReference } = await checkoutFacade.completePurchase(
       customer,
@@ -88,13 +72,12 @@ test.describe('DB — Flujo de orden @db @regression', () => {
     const sumLines = lines.reduce((acc, line) => acc + Number(line.total_price_tax_incl), 0);
     const expectedTotal = sumLines + Number(order!.total_shipping_tax_incl);
 
-    // Comparación con 2 decimales de tolerancia (redondeo de moneda).
     expect(Number(order!.total_paid_tax_incl)).toBeCloseTo(expectedTotal, 2);
     expect(Number(order!.total_paid)).toBeCloseTo(expectedTotal, 2);
   });
 
   test('ps_stock_available.quantity se decrementa correctamente tras confirmar la orden', async ({
-    loginPage,
+    registerPage,
     checkoutFacade,
     dbClient,
   }) => {
@@ -104,8 +87,10 @@ test.describe('DB — Flujo de orden @db @regression', () => {
     const before = await dbClient.queryOne<{ quantity: number }>(stockQuery, [PRODUCT_ID]);
     expect(before, `No se encontró ps_stock_available para id_product=${PRODUCT_ID}`).not.toBeNull();
 
-    await loginTestCustomer(loginPage);
-    const customer = CustomerFactory.create({ email: process.env.TEST_CUSTOMER_EMAIL });
+    const customer = CustomerFactory.create();
+    await registerPage.goto();
+    await registerPage.register(customer);
+
     const quantity = 1;
     const { confirmed } = await checkoutFacade.completePurchase(
       customer,
@@ -125,13 +110,14 @@ test.describe('DB — Flujo de orden @db @regression', () => {
   });
 
   test('current_state inicial corresponde a "Awaiting bankwire payment" inmediatamente después del checkout', async ({
-    loginPage,
+    registerPage,
     checkoutFacade,
     dbClient,
   }) => {
-    await loginTestCustomer(loginPage);
+    const customer = CustomerFactory.create();
+    await registerPage.goto();
+    await registerPage.register(customer);
 
-    const customer = CustomerFactory.create({ email: process.env.TEST_CUSTOMER_EMAIL });
     const { confirmed, orderReference } = await checkoutFacade.completePurchase(
       customer,
       PRODUCT_ID,
