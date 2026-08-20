@@ -150,6 +150,23 @@ jobs:
       - uses: ./.github/actions/setup-instance
         id: instance
       - run: npx playwright install --with-deps
+      - name: Instalar dependencias del ERP mock
+        working-directory: erp-mock
+        run: npm install --no-audit --no-fund
+      - name: Levantar ERP mock en background
+        working-directory: erp-mock
+        run: node_modules/.bin/ts-node src/server.ts &
+      - name: Esperar healthcheck del ERP mock
+        run: |
+          for i in $(seq 1 15); do
+            if curl -sf http://localhost:4000/health > /dev/null; then
+              echo "ERP mock healthy after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "ERP mock never became healthy" >&2
+          exit 1
       - run: npx playwright test --shard=${{ matrix.shard }}/4
         env:
           WEBSERVICE_WEBHOOK_SECRET: ${{ steps.instance.outputs.webservice_webhook_secret }}
