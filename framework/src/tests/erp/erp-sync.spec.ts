@@ -47,6 +47,7 @@ class FakeProductsApi implements ProductsApiLike {
 }
 
 test.describe('@regression @api ERP sync resilience', () => {
+  test.describe.configure({ mode: 'serial' });
   let erpClient: ErpMockClient;
 
   test.beforeEach(async () => {

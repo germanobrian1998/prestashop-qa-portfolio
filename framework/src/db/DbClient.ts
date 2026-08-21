@@ -19,7 +19,7 @@ export class DbClient {
 
   /** SELECT que devuelve múltiples filas. */
   async query<T = Record<string, unknown>>(sql: string, params: unknown[] = []): Promise<T[]> {
-    const [rows] = await this.connection.execute(sql, params);
+    const [rows] = await this.connection.execute(sql, params as Array<string | number | boolean | null | Buffer | Date>);
     return rows as T[];
   }
 

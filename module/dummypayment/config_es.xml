@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<module>
+    <name>dummypayment</name>
+    <displayName><![CDATA[Dummy Payment (QA)]]></displayName>
+    <version><![CDATA[1.0.0]]></version>
+    <description><![CDATA[M&oacute;dulo de pago simulado para testear confirmaci&oacute;n as&iacute;ncrona, sin gateway real. Solo para entornos de QA.]]></description>
+    <author><![CDATA[PrestaShop QA Portfolio]]></author>
+    <tab><![CDATA[payments_gateways]]></tab>
+	<confirmUninstall><![CDATA[¿Seguro que querés desinstalar el módulo de pago dummy?]]></confirmUninstall>
+    <is_configurable>1</is_configurable>
+    <need_instance>0</need_instance>
+</module>

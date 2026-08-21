@@ -1,49 +1,33 @@
 import { test, expect } from '../../fixtures';
+import { CustomerFactory } from '../../factories/CustomerFactory';
 
 /**
- * Sección 7 — Flujo de carrito (UI → BD). Cierra los dos escenarios
- * pedidos por el Archivo 2: cantidades en ps_cart_product vs. lo
- * agregado en UI, y persistencia/recuperación de un carrito abandonado
- * al re-loguear.
+ * Sección 7 — Flujo de carrito (UI → BD).
+ *
+ * FIX 2026-08-18: antes usaba TEST_CUSTOMER_EMAIL fijo compartido entre
+ * los 2 tests de este archivo — bajo ejecución paralela (workers > 1),
+ * ambos tests pisaban el mismo carrito del mismo cliente y los asserts
+ * de id_cart fallaban por contención, no por un bug real (confirmado en
+ * CI: "Expected: 6, Received: 7"). Fix: cada test registra su propio
+ * cliente vía CustomerFactory + RegisterPage — carritos completamente
+ * aislados entre tests, sin necesidad de serializar.
  *
  * ⚠️ SUPUESTOS SIN CONFIRMAR (marcar y revisar):
- * 1. TEST_CUSTOMER_EMAIL / TEST_CUSTOMER_PASSWORD en .env — mismo
- *    supuesto que orden.spec.ts.
+ * 1. RegisterPage.register() deja al cliente logueado inmediatamente
+ *    tras el submit (comportamiento default de PrestaShop) — no se hace
+ *    un login explícito después de registrar.
  * 2. Productos demo id_product=1 ("Hummingbird printed t-shirt") e
  *    id_product=2 ("Hummingbird printed sweater") sin combinaciones
- *    (id_product_attribute=0) — confirmado el nombre/existencia contra
- *    la instancia real, pero NO confirmado si tienen combinaciones
- *    obligatorias (talle/color). Si ProductPage.addToCart() falla por
- *    necesitar seleccionar una variante primero, es la primera causa a
- *    revisar.
+ *    (id_product_attribute=0).
  * 3. CartPage.ts no expone ningún método de lectura de cantidad mostrada
- *    en un renglón (solo updateQuantity, que escribe). Por eso el primer
- *    escenario valida la cantidad que NOSOTROS seteamos al agregar
- *    (vía ProductPage.setQuantity(), ya confirmado que funciona porque
- *    lo usa CheckoutFacade) contra lo que queda en ps_cart_product — no
- *    es una comparación contra un valor leído de la UI, porque ese
- *    método no existe hoy. Si se agrega un getter de cantidad a
- *    CartPage más adelante, vale la pena sumar esa aserción extra.
+ *    en un renglón (solo updateQuantity, que escribe).
  * 4. El carrito "actual" del cliente se identifica como el de
- *    MAX(date_upd) en ps_cart para su id_customer — no hay otro
- *    identificador expuesto por la UI/framework en este punto.
- * 5. "Cerrar sesión" (logout) no borra ni resetea el carrito — es lo que
- *    el propio escenario de negocio busca confirmar, así que no se da
- *    por sentado de antemano.
+ *    MAX(date_upd) en ps_cart para su id_customer.
+ * 5. "Cerrar sesión" (logout) no borra ni resetea el carrito.
  */
 
 const PRODUCT_A_ID = 1; // Hummingbird printed t-shirt
 const PRODUCT_B_ID = 2; // Hummingbird printed sweater
-
-async function loginTestCustomer(loginPage: import('../../pages/frontoffice/LoginPage').LoginPage) {
-  const email = process.env.TEST_CUSTOMER_EMAIL ?? '';
-  const password = process.env.TEST_CUSTOMER_PASSWORD ?? '';
-  if (!email || !password) {
-    throw new Error('TEST_CUSTOMER_EMAIL / TEST_CUSTOMER_PASSWORD no están definidas en .env');
-  }
-  await loginPage.goto();
-  await loginPage.login(email, password);
-}
 
 async function getCurrentCartId(
   dbClient: import('../../db/DbClient').DbClient,
@@ -66,11 +50,14 @@ async function getCurrentCartId(
 
 test.describe('DB — Flujo de carrito @db @regression', () => {
   test('agregar productos distintos refleja las cantidades correctas en ps_cart_product', async ({
-    loginPage,
+    registerPage,
     productPage,
     dbClient,
   }) => {
-    await loginTestCustomer(loginPage);
+    // Cliente aislado por test — evita colisión de carrito bajo ejecución paralela.
+    const customer = CustomerFactory.create();
+    await registerPage.goto();
+    await registerPage.register(customer);
 
     const quantityA = 2;
     const quantityB = 3;
@@ -83,7 +70,7 @@ test.describe('DB — Flujo de carrito @db @regression', () => {
     await productPage.setQuantity(quantityB);
     await productPage.addToCart();
 
-    const cartId = await getCurrentCartId(dbClient, process.env.TEST_CUSTOMER_EMAIL ?? '');
+    const cartId = await getCurrentCartId(dbClient, customer.email);
 
     const rows = await dbClient.query<{ id_product: number; quantity: number }>(
       'SELECT id_product, quantity FROM ps_cart_product WHERE id_cart = ? AND id_product IN (?, ?)',
@@ -101,20 +88,23 @@ test.describe('DB — Flujo de carrito @db @regression', () => {
 
   test('un carrito abandonado persiste asociado al id_customer y se recupera al re-loguear', async ({
     page,
+    registerPage,
     loginPage,
     productPage,
     dbClient,
   }) => {
-    const email = process.env.TEST_CUSTOMER_EMAIL ?? '';
+    // Cliente aislado por test — mismo motivo que el test anterior.
+    const customer = CustomerFactory.create();
+    await registerPage.goto();
+    await registerPage.register(customer);
 
-    // 1. Login, agregar un producto, NO completar la compra.
-    await loginTestCustomer(loginPage);
+    // 1. Agregar un producto, NO completar la compra.
     const quantity = 1;
     await productPage.gotoById(PRODUCT_A_ID);
     await productPage.setQuantity(quantity);
     await productPage.addToCart();
 
-    const cartIdBeforeLogout = await getCurrentCartId(dbClient, email);
+    const cartIdBeforeLogout = await getCurrentCartId(dbClient, customer.email);
 
     const rowsBeforeLogout = await dbClient.query<{ id_product: number; quantity: number }>(
       'SELECT id_product, quantity FROM ps_cart_product WHERE id_cart = ? AND id_product = ?',
@@ -123,16 +113,15 @@ test.describe('DB — Flujo de carrito @db @regression', () => {
     expect(rowsBeforeLogout.length, 'El producto debería estar en el carrito antes de cerrar sesión').toBe(1);
 
     // 2. "Abandonar" el carrito: cerrar sesión sin comprar.
-    // No hay un método dedicado de logout en LoginPage — se usa el mismo
-    // link "Cerrar sesión" cuya visibilidad ya confirma isLoggedIn().
     await page.getByRole('link', { name: /cerrar sesión/i }).first().click();
 
-    // 3. Re-loguear.
-    await loginTestCustomer(loginPage);
+    // 3. Re-loguear con las credenciales del cliente recién registrado.
+    await loginPage.goto();
+    await loginPage.login(customer.email, customer.password);
 
     // 4. Confirmar en BD que el MISMO carrito (mismo id_cart) sigue
     // existiendo con la línea intacta — no que se haya creado uno nuevo.
-    const cartIdAfterRelogin = await getCurrentCartId(dbClient, email);
+    const cartIdAfterRelogin = await getCurrentCartId(dbClient, customer.email);
     expect(
       cartIdAfterRelogin,
       'El carrito debería seguir siendo el mismo id_cart tras re-loguear, no uno nuevo'

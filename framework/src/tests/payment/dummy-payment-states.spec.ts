@@ -16,6 +16,22 @@ import { createOrderInState } from './helpers';
  *     aserciones de ese grupo.
  *   - Transiciones válidas: cada una necesita su propio pedido fresco,
  *     porque aplicarla consume el estado "from" de ese pedido.
+ *
+ * FIX 2026-08-21: los 5 tests de este archivo usaban
+ * CustomerFactory.create({ email: process.env.TEST_CUSTOMER_EMAIL }) --
+ * el mismo email fijo compartido, a diferencia del patrón de aislamiento
+ * ya establecido en carrito.spec.ts/orden.spec.ts (CustomerFactory.create()
+ * sin override). Sin describe.serial en este archivo, los tests corren en
+ * paralelo -- varios intentando registrar/loguear el MISMO email en
+ * simultáneo dentro de checkoutFacade.completePurchase(). Confirmado en
+ * CI (dos corridas distintas, dos tests distintos, mismo punto de falla):
+ * TimeoutError esperando el botón "Continuar" en CheckoutAddressPage, que
+ * nunca llega a habilitarse -- consistente con que el checkout quedó en
+ * un estado inesperado por colisión de registro de cliente, no con un
+ * problema de timing de UI. No se encontró ninguna razón funcional para
+ * fijar el email: dummyPaymentWebhookClient autentica vía API key propia,
+ * no vía la sesión del customer. Fix: quitar el override, igual patrón
+ * que el resto de la suite.
  */
 
 test.describe('Dummy Payment — transiciones inválidas e idempotentes @payment @regression', () => {
@@ -36,7 +52,7 @@ test.describe('Dummy Payment — transiciones inválidas e idempotentes @payment
       checkoutFacade,
       dummyPaymentWebhookClient,
     }) => {
-      const customer = CustomerFactory.create({ email: process.env.TEST_CUSTOMER_EMAIL });
+      const customer = CustomerFactory.create();
       const orderReference = await createOrderInState(checkoutFacade, dummyPaymentWebhookClient, customer, from);
 
       for (const { to, expected } of cases) {
@@ -61,7 +77,7 @@ test.describe('Dummy Payment — transiciones válidas @payment @regression', ()
 
   for (const { from, to } of validCases) {
     test(`"${from}" → "${to}" se aplica correctamente`, async ({ checkoutFacade, dummyPaymentWebhookClient }) => {
-      const customer = CustomerFactory.create({ email: process.env.TEST_CUSTOMER_EMAIL });
+      const customer = CustomerFactory.create();
       const orderReference = await createOrderInState(checkoutFacade, dummyPaymentWebhookClient, customer, from);
 
       const result = await dummyPaymentWebhookClient.confirm(orderReference, to);
@@ -80,7 +96,7 @@ test.describe('Dummy Payment — escenarios narrativos @payment @smoke', () => {
     checkoutFacade,
     dummyPaymentWebhookClient,
   }) => {
-    const customer = CustomerFactory.create({ email: process.env.TEST_CUSTOMER_EMAIL });
+    const customer = CustomerFactory.create();
     const orderReference = await createOrderInState(checkoutFacade, dummyPaymentWebhookClient, customer, 'pending');
 
     const first = await dummyPaymentWebhookClient.confirm(orderReference, 'approved');
@@ -99,7 +115,7 @@ test.describe('Dummy Payment — escenarios narrativos @payment @smoke', () => {
     checkoutFacade,
     dummyPaymentWebhookClient,
   }) => {
-    const customer = CustomerFactory.create({ email: process.env.TEST_CUSTOMER_EMAIL });
+    const customer = CustomerFactory.create();
     // El cliente "abandonó" el checkout tras el timeout — no hay ninguna
     // página esperando esta respuesta cuando el gateway confirma tarde.
     const orderReference = await createOrderInState(checkoutFacade, dummyPaymentWebhookClient, customer, 'timeout');
@@ -116,7 +132,7 @@ test.describe('Dummy Payment — escenarios narrativos @payment @smoke', () => {
     checkoutFacade,
     dummyPaymentWebhookClient,
   }) => {
-    const customer = CustomerFactory.create({ email: process.env.TEST_CUSTOMER_EMAIL });
+    const customer = CustomerFactory.create();
     const orderReference = await createOrderInState(checkoutFacade, dummyPaymentWebhookClient, customer, 'rejected');
 
     const result = await dummyPaymentWebhookClient.confirm(orderReference, 'approved');

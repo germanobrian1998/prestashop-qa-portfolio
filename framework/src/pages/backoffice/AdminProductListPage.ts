@@ -19,7 +19,13 @@ export class AdminProductListPage extends BasePage {
   }
 
   private get productsMenuLink() {
-    return this.page.getByRole('link', { name: 'Productos', exact: true });
+    // Acotado a #subtab-AdminProducts (el <li> del menú lateral) --
+    // sin esto, el locator también matchea el link "Productos" del
+    // breadcrumb cuando ambos coexisten brevemente en el DOM durante
+    // la transición SPA de PrestaShop 8.1 (confirmado en CI: "strict
+    // mode violation ... resolved to 2 elements", con Playwright
+    // sugiriendo esta misma disambiguación en el mensaje de error).
+    return this.page.locator('#subtab-AdminProducts').getByRole('link', { name: 'Productos', exact: true });
   }
 
   private get productRows() {

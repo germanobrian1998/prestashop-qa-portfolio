@@ -1,0 +1,255 @@
+# .github/workflows/qa.yml
+# -----------------------------------------------------------------------
+# Sección 8 — CI/CD con GitHub Actions.
+#
+# Depende de que scripts/ci-seed.ts (Sección 8) resuelva el GAP CRÍTICO
+# documentado en 00-estado-proyecto-v4.md — y AMPLIADO tras verificación
+# en vivo el 2026-08-15: no solo se pierden cliente de test / carrier /
+# webhook secret, sino que el Webservice completo (feature PS_WEBSERVICE
+# + ps_webservice_account + ps_webservice_account_shop +
+# ps_webservice_permission) puede quedar vacío incluso SIN una
+# reinstalación completa — se confirmó vacío contra una instancia con
+# containers de varios días de antigüedad, solo reiniciados. En un
+# pipeline que reinstala desde cero en cada corrida (PS_INSTALL_AUTO=1)
+# esto es el estado inicial esperado siempre, no una excepción.
+#
+# SUPUESTOS RESUELTOS (confirmados contra la instancia real, 2026-08-15):
+#   - [C] key del webhook secret, [A]/[B] zona South America en carrier
+#     existente (no carrier nuevo), y ambas cuentas del Webservice con
+#     sus permisos exactos — ver cabecera de scripts/ci-seed.ts.
+#   - Activación del módulo dummy payment: `php bin/console
+#     prestashop:module install dummypayment` (confirmado idempotente,
+#     corre sin error incluso si ya estaba instalado y activo).
+#
+# SUPUESTOS RESUELTOS ESTA SESIÓN (2026-08-18, primera corrida real
+# contra GitHub Actions):
+#   - [D] TARGET_CARRIER_ID_REFERENCE=2 CONFIRMADO contra instalación
+#     100% limpia vía PS_INSTALL_AUTO=1 en el runner de GitHub Actions
+#     (antes solo se había confirmado contra containers preexistentes).
+#     ci-seed.ts corrió sin fallar el chequeo explícito de este supuesto.
+#   - Healthcheck real: PrestaShop devuelve 302 (no 200) desde "/" como
+#     comportamiento NORMAL post-instalación exitosa (confirmado con
+#     `docker compose logs`: "-- Installation successful! --" seguido de
+#     302 consistente, no transitorio). Fix: curl -L para seguir el
+#     redirect y evaluar el código final.
+#   - GAP DE ARQUITECTURA encontrado y resuelto: cada job de GitHub
+#     Actions corre en su propia VM aislada. `needs: setup` solo
+#     garantiza orden de ejecución, NO comparte los containers Docker
+#     levantados en el job `setup` con jobs downstream (smoke,
+#     regression, db-testing, performance) — cada uno necesita su
+#     PROPIA instancia. Resuelto extrayendo la lógica de instalación a
+#     `.github/actions/setup-instance` (composite action), invocado por
+#     cada job que necesita una instancia viva. El job `setup` en sí se
+#     mantiene como gate fail-fast: si la instalación no es viable,
+#     falla una sola vez ahí en vez de fallar en paralelo en 6+ jobs
+#     downstream (smoke + 4 shards de regression + db-testing),
+#     desperdiciando minutos de CI.
+#
+# SUPUESTOS SIN CONFIRMAR RESTANTES:
+#   - JOB "api" (Postman/Newman): no hay colección de Postman en el repo
+#     todavía. Este job queda como placeholder comentado — no activar
+#     hasta que exista la colección, para no romper el pipeline con un
+#     paso que no tiene qué ejecutar.
+# -----------------------------------------------------------------------
+
+name: QA Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+env:
+  PRESTASHOP_IMAGE_TAG: ${{ vars.PRESTASHOP_IMAGE_TAG }} # pinneado, nunca 'latest'
+  BASE_URL: http://localhost
+  ADMIN_MAIL: ${{ secrets.ADMIN_MAIL }}
+  ADMIN_PASSWD: ${{ secrets.ADMIN_PASSWD }}
+  TEST_CUSTOMER_EMAIL: ${{ secrets.TEST_CUSTOMER_EMAIL }}
+  TEST_CUSTOMER_PASSWORD: ${{ secrets.TEST_CUSTOMER_PASSWORD }}
+  DATABASE_URL: mysql://root:${{ secrets.DB_PASSWD }}@localhost:3306/prestashop
+  # Confirmado 2026-08-15: son valores FIJOS, no algo que se "genera" en
+  # runtime — el string de la key es a la vez el valor de Basic Auth y
+  # lo que se inserta como ps_webservice_account.key. ci-seed.ts (vía el
+  # composite action ./.github/actions/setup-instance) es quien crea la
+  # cuenta/permiso/asociación a shop para que la key funcione.
+  WEBSERVICE_API_KEY: ${{ secrets.WEBSERVICE_API_KEY }}
+  WEBSERVICE_API_KEY_ORDERS_READONLY: ${{ secrets.WEBSERVICE_API_KEY_ORDERS_READONLY }}
+  # Cuenta dedicada solo a seeding (customers:POST/GET) — NUNCA referenciada
+  # por permisos.feature ni ningún test de seguridad. Separada a propósito
+  # de las 2 keys de arriba para no ampliar su scope. Ver ci-seed.ts.
+  WEBSERVICE_SEED_API_KEY: ${{ secrets.WEBSERVICE_SEED_API_KEY }}
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+
+  # ── Gate 1: lint + typecheck ────────────────────────────────────────
+  lint:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: framework
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: framework/package-lock.json
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npx eslint src/
+
+  # ── Gate 2: validar que la instalación 100% automática + seed son
+  #    viables. Gate fail-fast: si esto falla, evita gastar minutos de CI
+  #    en 6+ jobs downstream que fallarían igual por la misma causa. Los
+  #    outputs de ESTA corrida se descartan a propósito — cada job
+  #    downstream levanta su PROPIA instancia (ver nota de arquitectura
+  #    arriba), no puede reusar containers de este job.
+  setup:
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-instance
+
+  # ── Smoke ────────────────────────────────────────────────────────────
+  smoke:
+    needs: setup
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: framework
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-instance
+        id: instance
+      - run: npx playwright install --with-deps
+      - run: npx playwright test --grep @smoke
+        env:
+          WEBSERVICE_WEBHOOK_SECRET: ${{ steps.instance.outputs.webservice_webhook_secret }}
+          CARRIER_SOUTH_AMERICA_ID: ${{ steps.instance.outputs.carrier_south_america_id }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: smoke-report
+          path: framework/playwright-report/
+
+  # ── Regression (paralelo, sharded) ──────────────────────────────────
+  regression:
+    needs: smoke
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    defaults:
+      run:
+        working-directory: framework
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-instance
+        id: instance
+      - run: npx playwright install --with-deps
+      - name: Instalar dependencias del ERP mock
+        working-directory: erp-mock
+        run: npm install --no-audit --no-fund
+      - name: Levantar ERP mock en background
+        working-directory: erp-mock
+        run: node_modules/.bin/ts-node src/server.ts &
+      - name: Esperar healthcheck del ERP mock
+        run: |
+          for i in $(seq 1 15); do
+            if curl -sf http://localhost:4000/health > /dev/null; then
+              echo "ERP mock healthy after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "ERP mock never became healthy" >&2
+          exit 1
+      - run: npx playwright test --shard=${{ matrix.shard }}/4
+        env:
+          WEBSERVICE_WEBHOOK_SECRET: ${{ steps.instance.outputs.webservice_webhook_secret }}
+          CARRIER_SOUTH_AMERICA_ID: ${{ steps.instance.outputs.carrier_south_america_id }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: regression-report-shard-${{ matrix.shard }}
+          path: framework/playwright-report/
+
+  # ── API (Postman/Newman) ────────────────────────────────────────────
+  # PLACEHOLDER: no hay colección de Postman en el repo todavía (no
+  # documentada en ningún archivo de estado). Job comentado hasta que
+  # exista `postman/collection.json`. La cobertura de API vía Playwright
+  # (proyecto `api`, Sección 5) ya corre dentro de smoke/regression.
+  #
+  # api:
+  #   needs: setup
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: ./.github/actions/setup-instance
+  #     - run: npx newman run postman/collection.json --env-var baseUrl=$BASE_URL
+
+  # ── DB testing ───────────────────────────────────────────────────────
+  db-testing:
+    needs: setup
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: framework
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-instance
+        id: instance
+      - run: npx playwright install --with-deps
+      - run: npx playwright test --project=db
+        env:
+          WEBSERVICE_WEBHOOK_SECRET: ${{ steps.instance.outputs.webservice_webhook_secret }}
+          CARRIER_SOUTH_AMERICA_ID: ${{ steps.instance.outputs.carrier_south_america_id }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: db-testing-report
+          path: framework/playwright-report/
+
+  # ── Performance (solo en merge a main) ──────────────────────────────
+  performance:
+    needs: [regression, db-testing]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-instance
+      - name: Instalar k6
+        run: |
+          curl -s https://github.com/grafana/k6/releases/latest/download/k6-linux-amd64.tar.gz -L | tar xz --strip-components 1
+      - run: ./k6 run framework/k6/load-test.js --out json=k6-results.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: k6-results
+          path: k6-results.json
+
+  # ── Reporte de fallo en PR ──────────────────────────────────────────
+  notify:
+    needs: [smoke, regression, db-testing]
+    if: always() && github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Comentar resultado en el PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const jobs = ['smoke', 'regression', 'db-testing'];
+            const results = ${{ toJSON(needs) }};
+            const lines = jobs.map(j => `- ${j}: ${results[j]?.result ?? 'unknown'}`);
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `**Resultado QA Pipeline**\n${lines.join('\n')}`,
+            });
