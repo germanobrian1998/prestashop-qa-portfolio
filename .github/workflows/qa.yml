@@ -226,9 +226,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-instance
       - name: Instalar k6
-        run: |
-          curl -s https://github.com/grafana/k6/releases/latest/download/k6-linux-amd64.tar.gz -L | tar xz --strip-components 1
-      - run: ./k6 run framework/k6/load-test.js --out json=k6-results.json
+        uses: grafana/setup-k6-action@v1
+      - run: k6 run framework/k6/load-test.js --out json=k6-results.json
       - uses: actions/upload-artifact@v4
         with:
           name: k6-results
