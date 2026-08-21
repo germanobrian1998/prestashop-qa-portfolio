@@ -12,23 +12,34 @@ import { CustomerFactory } from '../../factories/CustomerFactory';
  * elimina cualquier colisión de sesión/carrito entre los 3 tests; (b)
  * describe.configure({ mode: 'serial' }) para que los 3 tests de este
  * archivo nunca corran al mismo tiempo, eliminando la carrera sobre
- * ps_stock_available. Válido porque el job db-testing corre
- * --project=db en aislamiento (ver qa.yml) — ningún otro proyecto
- * compite por id_product=1 en simultáneo dentro de esa corrida.
+ * ps_stock_available.
+ *
+ * FIX 2026-08-20: el describe.serial de arriba solo protegía contra
+ * colisión ENTRE los 3 tests de este archivo -- no contra otros specs
+ * (purchase.spec.ts, dummy-payment-states.spec.ts) que también
+ * completan órdenes reales sobre id_product=1 en el job `regression`,
+ * donde SÍ corren en paralelo con este archivo (a diferencia de
+ * db-testing, que aísla --project=db). Confirmado en CI: "Stock
+ * esperado: 2397, real: 2395" en regression shard 3. Fix: el test de
+ * stock usa un producto RESERVADO (STOCK_ASSERTION_PRODUCT_ID) que
+ * ningún otro spec del repo usa para completar compras -- ver
+ * constante abajo. Los otros 2 tests de este archivo (total_paid,
+ * current_state) NO verifican un valor exacto de stock, así que siguen
+ * usando PRODUCT_ID=1 sin problema aunque otras suites lo compartan.
  *
  * ⚠️ SUPUESTOS SIN CONFIRMAR (marcar y revisar):
  * 1. RegisterPage.register() deja al cliente logueado inmediatamente
  *    tras el submit.
  * 2. Producto demo id_product=1 sin combinaciones obligatorias.
  * 3. total_paid / total_paid_tax_incl almacenan el mismo valor.
- * 4. Si en algún momento se agregan MÁS specs al proyecto `db` que
- *    también toquen id_product=1 (o si db-testing deja de correr
- *    aislado de otros proyectos), este describe.serial deja de ser
- *    suficiente — revisar esta nota si vuelve a aparecer el mismo tipo
- *    de fallo.
  */
 
 const PRODUCT_ID = 1;
+const STOCK_ASSERTION_PRODUCT_ID = 2; // Hummingbird printed sweater
+// Reservado EXCLUSIVAMENTE para este archivo -- ningún otro spec debe
+// completar una compra real (completePurchase) contra este producto.
+// Si necesitás otro producto reservado en el futuro, documentarlo acá
+// y en el header de cada spec que complete órdenes reales.
 const BANKWIRE_AWAITING_STATE_ID = 10; // "En espera de pago por transferencia bancaria"
 
 test.describe('DB — Flujo de orden @db @regression', () => {
@@ -84,8 +95,8 @@ test.describe('DB — Flujo de orden @db @regression', () => {
     const stockQuery =
       'SELECT quantity FROM ps_stock_available WHERE id_product = ? AND id_product_attribute = 0';
 
-    const before = await dbClient.queryOne<{ quantity: number }>(stockQuery, [PRODUCT_ID]);
-    expect(before, `No se encontró ps_stock_available para id_product=${PRODUCT_ID}`).not.toBeNull();
+    const before = await dbClient.queryOne<{ quantity: number }>(stockQuery, [STOCK_ASSERTION_PRODUCT_ID]);
+    expect(before, `No se encontró ps_stock_available para id_product=${STOCK_ASSERTION_PRODUCT_ID}`).not.toBeNull();
 
     const customer = CustomerFactory.create();
     await registerPage.goto();
@@ -94,14 +105,17 @@ test.describe('DB — Flujo de orden @db @regression', () => {
     const quantity = 1;
     const { confirmed } = await checkoutFacade.completePurchase(
       customer,
-      PRODUCT_ID,
+      STOCK_ASSERTION_PRODUCT_ID,
       { method: 'bankwire' },
       quantity
     );
     expect(confirmed, 'El checkout debería confirmar la orden').toBe(true);
 
-    const after = await dbClient.queryOne<{ quantity: number }>(stockQuery, [PRODUCT_ID]);
-    expect(after, `No se encontró ps_stock_available para id_product=${PRODUCT_ID} tras la compra`).not.toBeNull();
+    const after = await dbClient.queryOne<{ quantity: number }>(stockQuery, [STOCK_ASSERTION_PRODUCT_ID]);
+    expect(
+      after,
+      `No se encontró ps_stock_available para id_product=${STOCK_ASSERTION_PRODUCT_ID} tras la compra`
+    ).not.toBeNull();
 
     expect(
       after!.quantity,
