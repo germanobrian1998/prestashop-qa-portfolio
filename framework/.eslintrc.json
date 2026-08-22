@@ -23,6 +23,7 @@
     "dist",
     "playwright-report",
     "test-results",
-    "node_modules"
+    "node_modules",
+    "k6"
   ]
 }
